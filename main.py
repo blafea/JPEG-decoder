@@ -65,7 +65,6 @@ class JPEG_decoder:
                     elif hex(self.jpg[now + 1]) == "0xc4":
                         self.def_huff_table(self.jpg[now + 4 : now + length + 2])
 
-
                     now += length + 2
 
     def def_quant_table(self, data):
@@ -97,13 +96,6 @@ class JPEG_decoder:
         dest = data[0] % 16
         huffsize = []
         huffcode = []
-        # now = 17
-        # for i in range(len(data[1:17])):
-        #     for j in range(data[1 + i]):
-        #         length.append(i)
-        #         elements.append(data[now])
-        #         now += 1
-        # print(data[1:17], length, elements)
 
         j = 1
         for i in range(1, 17):
@@ -146,8 +138,119 @@ class JPEG_decoder:
         return
 
     def decode_scan(self, data):
-        pass
+        length = data[0] * 256 + data[1] - 3
+        ns = data[2]
+        self.tab_tab = []
+        now = 4
+        for _ in range(ns):
+            self.tab_tab.append([data[now] // 16, data[now] % 16])
+            now += 2
+        # print(self.tab_tab)
+        now += 2
+        self.decode_image(data[now:])
 
+    def decode_image(self, data):
+        # print(bin(data[0])[2:], bin(data[1])[2:], bin(data[2])[2:])
+        # [0, -24, -33]
+        print(len("".join(list(map(lambda x: bin(x)[2:], data)))) - 2)
+        
+        global st
+        st = Stream(data)
+        while True:
+            dc_coef = [0]
+            mcu_component = []
+            for i in range(6):
+                if i < 4:
+                    idx = 0
+                elif i == 4:
+                    idx = 1
+                    dc_coef = [0]
+                elif i == 5:
+                    idx = 2
+                    dc_coef = [0]
+                decoded_matrix, dc_coef = self.decode_matrix(data, idx, dc_coef)
+                print(decoded_matrix)
+                # print(st.GetPos())
+                mcu_component.append(decoded_matrix)
+
+    def decode_matrix(self, data, idx, dc_coef):
+        matrix = np.zeros((8, 8), dtype=int)
+        dc_idx, ac_idx = self.tab_tab[idx]
+        now_word = ""
+        while now_word not in self.DC_huff[dc_idx]:
+            now_word += st.GetBit()
+        flw_bit_n = self.DC_huff[self.tab_tab[idx][0]][now_word]
+        if flw_bit_n == 0:
+            coef = 0
+        else:
+            flw_bit = "".join([st.GetBit() for _ in range(flw_bit_n)])
+            coef = self.magnitude(flw_bit)
+        # print(coef)
+        dc_coef.append(dc_coef[-1] + coef)
+        matrix[0][0] = dc_coef[-1]
+
+        now_idx = 1
+        while True:
+            now_word = ""
+            while now_word not in self.AC_huff[ac_idx]:
+                now_word += st.GetBit()
+            now_data = bin(self.AC_huff[ac_idx][now_word])[2:]
+            now_data = "0"*(8-len(now_data)) + now_data
+            # print(now_word, now_data)
+            if now_data == "00000000" or now_idx >= 64:
+                return matrix, dc_coef
+            if now_data == "11110000":
+                now_idx += 16
+                continue
+            now_idx += int(now_data[:4], 2)
+            m_code = ""
+            for _ in range(int(now_data[4:], 2)):
+                m_code += st.GetBit()
+            matrix = self.fill_matrix(matrix, now_idx, self.magnitude(m_code))
+            now_idx += 1
+        
+    def magnitude(self, codeword):
+        if codeword[0] == "0":
+            new_bit = ""
+            for i in range(len(codeword)):
+                new_bit += "0" if codeword[i] == "1" else "1"
+            coef = -int(new_bit, 2)
+        else:
+            coef = int(codeword, 2)
+        
+        return coef
+    
+    def fill_matrix(self, matrix, idx, data):
+        start = 0
+        it = 2
+        row = 0
+        while start < idx:
+            start += it
+            it += 1
+            row += 1
+        fix = start - idx
+        i, j = row - fix, fix
+        if row % 2 == 0:
+            i, j = j, i
+        matrix[i][j] = data
+        # TODO: fix the lower half matrix index
+
+        return matrix
+
+
+class Stream:
+    def __init__(self, data):
+        self.data = data
+        self.pos = 0
+
+    def GetBit(self):
+        b = self.data[self.pos >> 3]
+        s = 7 - (self.pos & 0x7)
+        self.pos += 1
+        return str((b >> s) & 1)
+    
+    def GetPos(self):
+        return self.pos
 
 if __name__ == "__main__":
     decoder = JPEG_decoder("./images/monalisa.jpg")
